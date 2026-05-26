@@ -14,4 +14,7 @@ tower-http = { version = "0.5", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dashmap = "5.5" # Concurrent HashMap for easier state management
+mime_guess = "2.0"
+rust-embed = "8.5"
+
 
