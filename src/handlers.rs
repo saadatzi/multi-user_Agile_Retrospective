@@ -46,28 +46,20 @@ pub async fn join_room(
 async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
     let (mut sender, mut receiver) = socket.split();
 
-    let participant_id = Uuid::new_v4();
-
-    tracing::info!(
-        "New WebSocket connection for room {}: participant {}",
-        room_id,
-        participant_id
-    );
-
+    // Read the first message (JOIN_ROOM) and extract name + optional client_id
     let join_text = match receiver.next().await {
         Some(Ok(Message::Text(text))) => text,
         Some(Ok(_)) => {
             tracing::warn!(
-                "Expected join message from {} in room {}",
-                participant_id,
+                "Expected JOIN_ROOM text message before upgrade for room {}",
                 room_id
             );
             return;
         }
         Some(Err(e)) => {
             tracing::error!(
-                "WebSocket receive error before join for {}: {}",
-                participant_id,
+                "WebSocket receive error before join for room {}: {}",
+                room_id,
                 e
             );
             return;
@@ -75,54 +67,88 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
         None => return,
     };
 
-    let participant_name = match serde_json::from_str::<ClientMessage>(&join_text) {
-        Ok(ClientMessage::JoinRoom { name }) => name,
-        Ok(_) => {
-            tracing::warn!(
-                "First message from {} in room {} was not JOIN_ROOM",
-                participant_id,
-                room_id
-            );
-            return;
+    let (participant_name, provided_client_id) =
+        match serde_json::from_str::<ClientMessage>(&join_text) {
+            Ok(ClientMessage::JoinRoom { name, client_id }) => (name, client_id),
+            Ok(_) => {
+                tracing::warn!("First message for room {} was not JOIN_ROOM", room_id);
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to parse initial client message for room {}: {}",
+                    room_id,
+                    e
+                );
+                return;
+            }
+        };
+
+    // We'll decide participant_id based on provided_client_id (if any) or generate a new one.
+    let (participant, room_to_send, tx) = {
+        let mut room_entry = match state.rooms.get_mut(&room_id) {
+            Some(entry) => entry,
+            None => {
+                tracing::error!("Room {} not found during JOIN_ROOM", room_id);
+                return;
+            }
+        };
+
+        // Decide participant_id
+        let participant_id = if let Some(cid) = provided_client_id {
+            cid
+        } else {
+            Uuid::new_v4()
+        };
+
+        // Check if participant already exists (reconnect), otherwise create
+        let participant_obj = if let Some(existing) = room_entry
+            .room
+            .participants
+            .iter_mut()
+            .find(|p| p.id == participant_id)
+        {
+            // update name (real_name) and visible name if not anonymous
+            existing.real_name = participant_name.clone();
+            if !existing.anonymous {
+                existing.name = existing.real_name.clone();
+            }
+            existing.clone()
+        } else {
+            let p = Participant::new(participant_id, participant_name.clone());
+            room_entry.room.participants.push(p.clone());
+            p
+        };
+
+        // If there are existing cards by this participant_id, update their author string
+        for card in room_entry
+            .room
+            .cards
+            .iter_mut()
+            .filter(|c| c.author_id == participant_id)
+        {
+            card.author = participant_obj.name.clone();
         }
-        Err(e) => {
-            tracing::warn!(
-                "Failed to parse initial client message from {}: {}",
-                participant_id,
-                e
-            );
-            return;
+
+        // If room has no creator, make this participant the creator
+        if room_entry.room.creator_id.is_none() {
+            room_entry.room.creator_id = Some(participant_id);
         }
+
+        (
+            participant_obj,
+            room_entry.room.clone(),
+            room_entry.tx.clone(),
+        )
     };
 
-    let participant = Participant::new(participant_id, participant_name);
+    let participant_id = participant.id;
     tracing::info!(
         "User {} joining room {} as {}",
         participant_id,
         room_id,
         participant.name
     );
-
-    let (room_to_send, tx) = {
-        let mut room_entry = match state.rooms.get_mut(&room_id) {
-            Some(entry) => entry,
-            None => {
-                tracing::error!(
-                    "Room {} not found during JOIN_ROOM for {}",
-                    room_id,
-                    participant_id
-                );
-                return;
-            }
-        };
-
-        if room_entry.room.creator_id.is_none() {
-            room_entry.room.creator_id = Some(participant_id);
-        }
-
-        room_entry.room.participants.push(participant.clone());
-        (room_entry.room.clone(), room_entry.tx.clone())
-    };
 
     let mut rx = tx.subscribe();
     let room_state = ServerMessage::RoomState {
@@ -300,16 +326,30 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
                     }
                     ClientMessage::SetShowNames { show_names } => {
                         tracing::info!(
-                            "User {} set show_names={} in room {}",
+                            "User {} requested set_show_names={} in room {}",
                             participant_id,
                             show_names,
                             room_id
                         );
                         if let Some(mut room_entry) = state_clone.rooms.get_mut(&room_id) {
-                            room_entry.room.show_names = show_names;
-                            let _ = room_entry
-                                .tx
-                                .send(ServerMessage::ShowNamesUpdated { show_names });
+                            // Only the room creator (host) may change the global show_names flag
+                            if room_entry.room.creator_id == Some(participant_id) {
+                                room_entry.room.show_names = show_names;
+                                let _ = room_entry
+                                    .tx
+                                    .send(ServerMessage::ShowNamesUpdated { show_names });
+                            } else {
+                                tracing::warn!(
+                                    "Non-creator {} tried to change show_names in room {}",
+                                    participant_id,
+                                    room_id
+                                );
+                                let _ = room_entry.tx.send(ServerMessage::Error {
+                                    message: String::from(
+                                        "Only the room host can toggle message visibility",
+                                    ),
+                                });
+                            }
                         }
                     }
                     ClientMessage::SetAnonymous { anonymous } => {
@@ -333,14 +373,10 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
                             };
 
                             if let Some(updated_participant) = updated_participant {
-                                for card in room_entry
-                                    .room
-                                    .cards
-                                    .iter_mut()
-                                    .filter(|card| card.author_id == participant_id)
-                                {
-                                    card.author = updated_participant.name.clone();
-                                }
+                                // Do NOT mutate existing card.author values here. We keep the
+                                // original author names on cards; the client will decide
+                                // whether to show or hide the name in messages based on
+                                // the participant.anonymous flag.
 
                                 let _ = room_entry.tx.send(ServerMessage::ParticipantUpdated {
                                     participant: updated_participant,
