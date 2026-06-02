@@ -74,11 +74,14 @@ async fn serve_frontend(uri: Uri) -> Response {
 
         match reqwest::get(&url).await {
             Ok(resp) => {
-                // Map important headers (Content-Type) and body
+                // Capture headers before consuming the response body
+                let ct_header = resp.headers().get(reqwest::header::CONTENT_TYPE).cloned();
+
+                // Map body
                 let bytes = resp.bytes().await.unwrap_or_default();
                 let mut response = Response::new(Body::from(bytes.to_vec()));
 
-                if let Some(ct) = resp.headers().get(reqwest::header::CONTENT_TYPE) {
+                if let Some(ct) = ct_header {
                     if let Ok(ct_str) = ct.to_str() {
                         if let Ok(hv) = HeaderValue::from_str(ct_str) {
                             response.headers_mut().insert(header::CONTENT_TYPE, hv);
