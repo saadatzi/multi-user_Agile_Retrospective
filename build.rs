@@ -21,10 +21,18 @@ fn main() {
     let frontend_dir = Path::new("frontend");
     let dist_dir = frontend_dir.join("dist");
 
-    // If a Vite dev server is running and set via env var, skip building the frontend.
+    // If a Vite dev server is running and set via env var, normally we skip building
+    // the frontend so developers can use HMR. However, if the `frontend/dist` output
+    // doesn't exist (for example on a fresh clone), build it so `cargo run` still
+    // produces a working embedded binary.
     if env::var_os("VITE_DEV_SERVER").is_some() {
-        println!("cargo:warning=VITE_DEV_SERVER is set, skipping frontend build (dev mode).");
-        return;
+        if dist_dir.exists() {
+            println!("cargo:warning=VITE_DEV_SERVER is set, skipping frontend build (dev mode).");
+            return;
+        } else {
+            println!("cargo:warning=VITE_DEV_SERVER is set but frontend/dist not found — building frontend so embedded assets are available.");
+            // fall through and build
+        }
     }
 
     if env::var_os("SKIP_FRONTEND_BUILD").is_some() {
