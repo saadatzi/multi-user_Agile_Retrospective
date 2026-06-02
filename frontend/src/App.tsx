@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/refs */
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import {
   Plus,
@@ -27,7 +28,20 @@ const WS_URL = import.meta.env.DEV
   : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/api`;
 
 export default function App() {
-  const [roomId, setRoomId] = useState<string | null>(null);
+  const [roomId, setRoomId] = useState<string | null>(() => {
+    try {
+      const pathParts = window.location.pathname.split("/").filter(Boolean);
+      if (pathParts.length >= 2 && pathParts[0] === "rooms" && pathParts[1]) {
+        return pathParts[1];
+      }
+
+      const params = new URLSearchParams(window.location.search);
+      const roomParam = params.get("room");
+      return roomParam || null;
+    } catch {
+      return null;
+    }
+  });
   const [name, setName] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
   const [joined, setJoined] = useState(false);
@@ -40,7 +54,7 @@ export default function App() {
     action_items: "",
   });
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
-  const [timeIsUp, setTimeIsUp] = useState(false);
+  const timeIsUp = timeLeft === 0;
 
   const ws = useRef<WebSocket | null>(null);
 
@@ -53,7 +67,7 @@ export default function App() {
   const participantsRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    function handleDocumentClick(e: MouseEvent) {
+    function handleDocumentClick(e: Event) {
       const target = e.target as Node | null;
       if (!participantsRef.current) return;
       if (!target) return;
@@ -67,31 +81,19 @@ export default function App() {
     }
 
     document.addEventListener("mousedown", handleDocumentClick);
-    document.addEventListener("touchstart", handleDocumentClick);
-    document.addEventListener("keydown", handleKey);
+    document.addEventListener(
+      "touchstart",
+      handleDocumentClick as EventListener,
+    );
+    document.addEventListener("keydown", handleKey as EventListener);
     return () => {
       document.removeEventListener("mousedown", handleDocumentClick);
-      document.removeEventListener("touchstart", handleDocumentClick);
-      document.removeEventListener("keydown", handleKey);
+      document.removeEventListener(
+        "touchstart",
+        handleDocumentClick as EventListener,
+      );
+      document.removeEventListener("keydown", handleKey as EventListener);
     };
-  }, []);
-
-  // If the URL contains a room id (e.g. /rooms/<roomId> or ?room=<roomId>), pre-fill it so
-  // users who open the link can join directly by entering their name.
-  useEffect(() => {
-    try {
-      const pathParts = window.location.pathname.split("/").filter(Boolean);
-      if (pathParts.length >= 2 && pathParts[0] === "rooms" && pathParts[1]) {
-        setRoomId(pathParts[1]);
-        return;
-      }
-
-      const params = new URLSearchParams(window.location.search);
-      const roomParam = params.get("room");
-      if (roomParam) setRoomId(roomParam);
-    } catch (e) {
-      // ignore (e.g. server-side rendering or non-browser env)
-    }
   }, []);
 
   const isCreator = room?.creator_id === userId;
@@ -106,11 +108,25 @@ export default function App() {
     ws.current = socket;
 
     socket.onopen = () => {
-      const msg: ClientMessage = {
-        type: "JOIN_ROOM",
-        payload: { name: userName },
-      };
-      socket.send(JSON.stringify(msg));
+      try {
+        const storageKey = `retro:room:${id}:id`;
+        const storedClientId = localStorage.getItem(storageKey) || undefined;
+        const payload: { name: string; client_id?: string } = {
+          name: userName,
+        };
+        if (storedClientId) payload.client_id = storedClientId;
+        const msg: ClientMessage = {
+          type: "JOIN_ROOM",
+          payload,
+        } as ClientMessage;
+        socket.send(JSON.stringify(msg));
+      } catch {
+        const msg: ClientMessage = {
+          type: "JOIN_ROOM",
+          payload: { name: userName },
+        } as ClientMessage;
+        socket.send(JSON.stringify(msg));
+      }
     };
 
     socket.onmessage = (event) => {
@@ -119,16 +135,24 @@ export default function App() {
         case "ROOM_STATE": {
           setRoom(msg.payload.room);
           setUserId(msg.payload.your_id);
+          try {
+            // Persist our client id for this room so future reconnects reuse it
+            localStorage.setItem(
+              `retro:room:${msg.payload.room.id}:id`,
+              msg.payload.your_id,
+            );
+          } catch {
+            // ignore
+          }
+
           if (msg.payload.room.timer_end_at) {
             const remaining = Math.max(
               0,
               msg.payload.room.timer_end_at - Math.floor(Date.now() / 1000),
             );
             setTimeLeft(remaining);
-            setTimeIsUp(remaining === 0);
           } else {
             setTimeLeft(null);
-            setTimeIsUp(false);
           }
           setError(null);
           setJoined(true);
@@ -228,13 +252,11 @@ export default function App() {
             msg.payload.end_at - Math.floor(Date.now() / 1000),
           );
           setTimeLeft(remaining);
-          setTimeIsUp(remaining === 0);
           break;
         }
         case "TIMER_STOPPED":
           setRoom((prev) => (prev ? { ...prev, timer_end_at: null } : null));
           setTimeLeft(null);
-          setTimeIsUp(false);
           break;
         case "SHOW_NAMES_UPDATED":
           setRoom((prev) =>
@@ -253,16 +275,12 @@ export default function App() {
       setRoom(null);
       setUserId(null);
       setTimeLeft(null);
-      setTimeIsUp(false);
       setError("Connection lost. Please try joining again.");
     };
   }, []);
 
   useEffect(() => {
     if (timeLeft === null || timeLeft <= 0) {
-      if (timeLeft === 0 && !timeIsUp) {
-        setTimeIsUp(true);
-      }
       return;
     }
 
@@ -277,7 +295,7 @@ export default function App() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [timeLeft, timeIsUp]);
+  }, [timeLeft]);
 
   const createRoom = async () => {
     setLoading(true);
@@ -300,7 +318,7 @@ export default function App() {
         try {
           const newPath = `/rooms/${data.room_id}`;
           window.history.pushState(null, "", newPath);
-        } catch (e) {
+        } catch {
           // ignore
         }
       } else {
@@ -341,38 +359,55 @@ export default function App() {
     ws.current.send(JSON.stringify(msg));
   };
 
-  const startTimer = (minutes: number) => {
+  const cancelTimer = useCallback(() => {
     if (!ws.current || !isCreator) return;
-    const msg: ClientMessage = {
-      type: "START_TIMER",
-      payload: { duration_seconds: minutes * 60 },
-    };
+    const msg: ClientMessage = { type: "CANCEL_TIMER" } as ClientMessage;
     ws.current.send(JSON.stringify(msg));
-  };
+  }, [isCreator]);
 
-  const adjustTimer = (seconds: number) => {
-    if (!ws.current || !isCreator) return;
-    const currentSeconds = timeLeft || 0;
-    const newTotal = Math.max(0, currentSeconds + seconds);
-    if (newTotal === 0) {
-      cancelTimer();
-      return;
-    }
-    const msg: ClientMessage = {
-      type: "START_TIMER",
-      payload: { duration_seconds: newTotal },
-    };
-    ws.current.send(JSON.stringify(msg));
-  };
+  const startTimer = useCallback(
+    (minutes: number) => {
+      if (!ws.current || !isCreator) return;
+      const msg: ClientMessage = {
+        type: "START_TIMER",
+        payload: { duration_seconds: minutes * 60 },
+      } as ClientMessage;
+      ws.current.send(JSON.stringify(msg));
+    },
+    [isCreator],
+  );
 
-  const cancelTimer = () => {
-    if (!ws.current || !isCreator) return;
-    const msg: ClientMessage = { type: "CANCEL_TIMER" };
-    ws.current.send(JSON.stringify(msg));
-  };
+  const adjustTimer = useCallback(
+    (seconds: number) => {
+      if (!ws.current || !isCreator) return;
+      const currentSeconds = timeLeft || 0;
+      const newTotal = Math.max(0, currentSeconds + seconds);
+      if (newTotal === 0) {
+        cancelTimer();
+        return;
+      }
+      const msg: ClientMessage = {
+        type: "START_TIMER",
+        payload: { duration_seconds: newTotal },
+      } as ClientMessage;
+      ws.current.send(JSON.stringify(msg));
+    },
+    [isCreator, timeLeft, cancelTimer],
+  );
+
+  // Timer quick buttons rendered as a stable variable.
+  const timerButtons = [1, 5, 10].map((m) => (
+    <button
+      key={m}
+      onClick={() => startTimer(m)}
+      className="text-[10px] font-bold hover:text-indigo-600 px-1"
+    >
+      {m}m
+    </button>
+  ));
 
   const toggleShowNames = () => {
-    if (!ws.current || !room) return;
+    if (!ws.current || !room || !isCreator) return;
     const msg: ClientMessage = {
       type: "SET_SHOW_NAMES",
       payload: { show_names: !showNames },
@@ -486,7 +521,9 @@ export default function App() {
                   setRoomId(null);
                   try {
                     window.history.pushState(null, "", "/");
-                  } catch (e) {}
+                  } catch {
+                    /* ignore: history may be unavailable in some environments */
+                  }
                 }}
                 className="w-full text-slate-500 text-sm font-medium hover:text-slate-700"
               >
@@ -523,11 +560,49 @@ export default function App() {
           <div className="h-4 w-px bg-slate-200 mx-2 hidden sm:block"></div>
 
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-full border border-slate-100 hidden sm:flex">
-              <Users className="w-4 h-4 text-slate-400" />
-              <span className="text-sm font-medium text-slate-600">
-                {room?.participants.length} Active
-              </span>
+            <div ref={participantsRef} className="relative">
+              <button
+                onClick={() => setParticipantsOpen((p) => !p)}
+                aria-expanded={participantsOpen}
+                className="flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-full border border-slate-100 hidden sm:flex"
+                title="Show active participants"
+              >
+                <Users className="w-4 h-4 text-slate-400" />
+                <span className="text-sm font-medium text-slate-600">
+                  {room?.participants.length} Active
+                </span>
+              </button>
+
+              {participantsOpen && (
+                <div className="absolute mt-2 right-0 w-56 bg-white rounded-lg border shadow-lg z-30 p-2">
+                  <div className="text-xs text-slate-500 font-semibold mb-2">
+                    Participants
+                  </div>
+                  <ul className="max-h-56 overflow-auto divide-y divide-slate-100">
+                    {(room?.participants || []).map((p) => (
+                      <li
+                        key={p.id}
+                        className={cn(
+                          "flex items-center justify-between px-2 py-2 text-sm",
+                          p.id === userId ? "bg-indigo-50" : "",
+                        )}
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 bg-slate-100 rounded-full flex items-center justify-center text-xs font-bold text-slate-500">
+                            {p.name[0]?.toUpperCase()}
+                          </div>
+                          <span className="text-slate-700">{p.name}</span>
+                        </div>
+                        {p.id === room?.creator_id ? (
+                          <span className="text-[10px] text-slate-400 uppercase">
+                            Host
+                          </span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
 
             {/* Timer Display */}
@@ -548,15 +623,7 @@ export default function App() {
                 {isCreator && (
                   <div className="flex items-center gap-1 ml-1 border-l border-slate-200 pl-2">
                     {timeLeft === null ? (
-                      [1, 5, 10].map((m) => (
-                        <button
-                          key={m}
-                          onClick={() => startTimer(m)}
-                          className="text-[10px] font-bold hover:text-indigo-600 px-1"
-                        >
-                          {m}m
-                        </button>
-                      ))
+                      timerButtons
                     ) : (
                       <>
                         <button
@@ -588,10 +655,21 @@ export default function App() {
 
         <div className="flex items-center gap-4">
           <button
-            onClick={toggleShowNames}
-            className="p-2 text-slate-400 hover:text-indigo-600 transition-colors flex items-center gap-2 text-xs font-bold uppercase tracking-wider"
+            onClick={isCreator ? toggleShowNames : undefined}
+            disabled={!isCreator}
+            aria-disabled={!isCreator}
+            className={cn(
+              "p-2 transition-colors flex items-center gap-2 text-xs font-bold uppercase tracking-wider",
+              isCreator
+                ? "text-slate-400 hover:text-indigo-600"
+                : "text-slate-300 cursor-not-allowed opacity-60",
+            )}
             title={
-              showNames ? "Hide Names And Messages" : "Show Names And Messages"
+              isCreator
+                ? showNames
+                  ? "Hide Names And Messages"
+                  : "Show Names And Messages"
+                : "Only the room host can toggle message visibility"
             }
           >
             {showNames ? (
@@ -715,32 +793,48 @@ export default function App() {
                 const authorName = authorParticipant?.name ?? card.author;
                 const authorIsAnonymous =
                   authorParticipant?.anonymous ?? authorName === "Anonymous";
+                const isOwnMessage = card.author_id === userId;
+                const showAuthorToViewer =
+                  isOwnMessage || (!authorIsAnonymous && showNames);
 
                 return (
                   <div
                     key={card.id}
                     className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm hover:border-indigo-200 transition-all group"
                   >
-                    <p
-                      className={cn(
-                        "text-sm mb-3 whitespace-pre-wrap",
-                        showNames ? "text-slate-800" : "text-slate-400 italic",
-                      )}
-                    >
-                      {showNames ? card.text : "Message hidden"}
-                    </p>
+                    {editingCardId === card.id ? (
+                      <textarea
+                        className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all outline-none text-sm min-h-[80px]"
+                        value={editingText}
+                        onChange={(e) => setEditingText(e.target.value)}
+                        autoFocus
+                      />
+                    ) : (
+                      <p
+                        className={cn(
+                          "text-sm mb-3 whitespace-pre-wrap",
+                          showNames || isOwnMessage
+                            ? "text-slate-800"
+                            : "text-slate-400 italic",
+                        )}
+                      >
+                        {showNames || isOwnMessage
+                          ? card.text
+                          : "Message hidden"}
+                      </p>
+                    )}
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1.5">
-                        <div className="w-5 h-5 bg-slate-100 rounded-full flex items-center justify-center text-[10px] font-bold text-slate-500">
-                          {showNames
-                            ? authorIsAnonymous
-                              ? "?"
-                              : authorName[0]?.toUpperCase()
-                            : "?"}
-                        </div>
-                        <span className="text-[11px] font-medium text-slate-400 capitalize">
-                          {showNames ? authorName : "Anonymous"}
-                        </span>
+                        {showAuthorToViewer && (
+                          <>
+                            <div className="w-5 h-5 bg-slate-100 rounded-full flex items-center justify-center text-[10px] font-bold text-slate-500">
+                              {authorName[0]?.toUpperCase()}
+                            </div>
+                            <span className="text-[11px] font-medium text-slate-400 capitalize">
+                              {authorName}
+                            </span>
+                          </>
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         {editingCardId === card.id ? null : (
@@ -774,13 +868,13 @@ export default function App() {
                             <button
                               onClick={() => {
                                 if (!ws.current) return;
-                                const msg = {
+                                const msg: ClientMessage = {
                                   type: "EDIT_CARD",
                                   payload: {
                                     card_id: card.id,
                                     text: editingText,
                                   },
-                                } as any;
+                                } as ClientMessage;
                                 ws.current.send(JSON.stringify(msg));
                                 setEditingCardId(null);
                                 setEditingText("");
