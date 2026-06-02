@@ -41,12 +41,11 @@ impl Participant {
     }
 
     pub fn set_anonymous(&mut self, anonymous: bool) {
+        // Only toggle the anonymous flag. Do NOT overwrite `name` here —
+        // keep the participant's stored name so the participants list can
+        // still display the real name. The UI will hide the name in
+        // messages when `anonymous` is true.
         self.anonymous = anonymous;
-        self.name = if anonymous {
-            String::from("Anonymous")
-        } else {
-            self.real_name.clone()
-        };
     }
 }
 
@@ -75,6 +74,7 @@ pub struct Room {
 pub enum ClientMessage {
     JoinRoom {
         name: String,
+        client_id: Option<Uuid>,
     },
     AddCard {
         text: String,
