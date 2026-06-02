@@ -73,12 +73,29 @@ pub struct Room {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClientMessage {
-    JoinRoom { name: String },
-    AddCard { text: String, category: CardCategory },
-    VoteCard { card_id: Uuid },
-    StartTimer { duration_seconds: u64 },
-    SetShowNames { show_names: bool },
-    SetAnonymous { anonymous: bool },
+    JoinRoom {
+        name: String,
+    },
+    AddCard {
+        text: String,
+        category: CardCategory,
+    },
+    VoteCard {
+        card_id: Uuid,
+    },
+    EditCard {
+        card_id: Uuid,
+        text: String,
+    },
+    StartTimer {
+        duration_seconds: u64,
+    },
+    SetShowNames {
+        show_names: bool,
+    },
+    SetAnonymous {
+        anonymous: bool,
+    },
     CancelTimer,
     LeaveRoom,
 }
@@ -92,6 +109,7 @@ pub enum ServerMessage {
     ParticipantUpdated { participant: Participant },
     CreatorChanged { creator_id: Option<Uuid> },
     CardAdded { card: Card },
+    CardEdited { card_id: Uuid, text: String },
     CardVoted { card_id: Uuid, votes: u32 },
     TimerStarted { end_at: u64 },
     TimerStopped,

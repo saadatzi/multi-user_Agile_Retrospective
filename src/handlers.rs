@@ -1,22 +1,22 @@
+use crate::models::{Card, ClientMessage, Participant, Room, ServerMessage};
+use crate::state::{RoomState, SharedState};
 use axum::{
-    extract::{Path, State, WebSocketUpgrade},
     extract::ws::{Message, WebSocket},
+    extract::{Path, State, WebSocketUpgrade},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use uuid::Uuid;
-use std::time::{SystemTime, UNIX_EPOCH};
-use crate::models::{Card, ClientMessage, Participant, Room, ServerMessage};
-use crate::state::{RoomState, SharedState};
 
 pub async fn create_room(State(state): State<SharedState>) -> impl IntoResponse {
     let room_id = Uuid::new_v4();
     let (tx, _) = broadcast::channel(100);
-    
+
     let room = Room {
         id: room_id,
         cards: Vec::new(),
@@ -25,9 +25,9 @@ pub async fn create_room(State(state): State<SharedState>) -> impl IntoResponse 
         creator_id: None,
         show_names: true,
     };
-    
+
     state.rooms.insert(room_id, RoomState { room, tx });
-    
+
     (StatusCode::CREATED, Json(json!({ "room_id": room_id })))
 }
 
@@ -39,7 +39,7 @@ pub async fn join_room(
     if !state.rooms.contains_key(&room_id) {
         return (StatusCode::NOT_FOUND, "Room not found").into_response();
     }
-    
+
     ws.on_upgrade(move |socket| handle_socket(socket, room_id, state))
 }
 
@@ -48,16 +48,28 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
 
     let participant_id = Uuid::new_v4();
 
-    tracing::info!("New WebSocket connection for room {}: participant {}", room_id, participant_id);
+    tracing::info!(
+        "New WebSocket connection for room {}: participant {}",
+        room_id,
+        participant_id
+    );
 
     let join_text = match receiver.next().await {
         Some(Ok(Message::Text(text))) => text,
         Some(Ok(_)) => {
-            tracing::warn!("Expected join message from {} in room {}", participant_id, room_id);
+            tracing::warn!(
+                "Expected join message from {} in room {}",
+                participant_id,
+                room_id
+            );
             return;
         }
         Some(Err(e)) => {
-            tracing::error!("WebSocket receive error before join for {}: {}", participant_id, e);
+            tracing::error!(
+                "WebSocket receive error before join for {}: {}",
+                participant_id,
+                e
+            );
             return;
         }
         None => return,
@@ -66,23 +78,40 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
     let participant_name = match serde_json::from_str::<ClientMessage>(&join_text) {
         Ok(ClientMessage::JoinRoom { name }) => name,
         Ok(_) => {
-            tracing::warn!("First message from {} in room {} was not JOIN_ROOM", participant_id, room_id);
+            tracing::warn!(
+                "First message from {} in room {} was not JOIN_ROOM",
+                participant_id,
+                room_id
+            );
             return;
         }
         Err(e) => {
-            tracing::warn!("Failed to parse initial client message from {}: {}", participant_id, e);
+            tracing::warn!(
+                "Failed to parse initial client message from {}: {}",
+                participant_id,
+                e
+            );
             return;
         }
     };
 
     let participant = Participant::new(participant_id, participant_name);
-    tracing::info!("User {} joining room {} as {}", participant_id, room_id, participant.name);
+    tracing::info!(
+        "User {} joining room {} as {}",
+        participant_id,
+        room_id,
+        participant.name
+    );
 
     let (room_to_send, tx) = {
         let mut room_entry = match state.rooms.get_mut(&room_id) {
             Some(entry) => entry,
             None => {
-                tracing::error!("Room {} not found during JOIN_ROOM for {}", room_id, participant_id);
+                tracing::error!(
+                    "Room {} not found during JOIN_ROOM for {}",
+                    room_id,
+                    participant_id
+                );
                 return;
             }
         };
@@ -110,7 +139,11 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
             }
         }
         Err(e) => {
-            tracing::error!("Failed to serialize initial room state for {}: {}", participant_id, e);
+            tracing::error!(
+                "Failed to serialize initial room state for {}: {}",
+                participant_id,
+                e
+            );
             cleanup_participant(&state, room_id, participant_id, false);
             return;
         }
@@ -153,10 +186,20 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
             if let Ok(msg) = serde_json::from_str::<ClientMessage>(&text) {
                 match msg {
                     ClientMessage::JoinRoom { .. } => {
-                        tracing::warn!("User {} sent duplicate JOIN_ROOM in room {}", participant_id, room_id);
+                        tracing::warn!(
+                            "User {} sent duplicate JOIN_ROOM in room {}",
+                            participant_id,
+                            room_id
+                        );
                     }
                     ClientMessage::AddCard { text, category } => {
-                        tracing::info!("User {} adding card to room {}: '{}' in {:?}", participant_id, room_id, text, category);
+                        tracing::info!(
+                            "User {} adding card to room {}: '{}' in {:?}",
+                            participant_id,
+                            room_id,
+                            text,
+                            category
+                        );
 
                         if let Some(mut room_entry) = state_clone.rooms.get_mut(&room_id) {
                             let author = room_entry
@@ -181,44 +224,101 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
                         }
                     }
                     ClientMessage::VoteCard { card_id } => {
-                        tracing::info!("User {} voting for card {} in room {}", participant_id, card_id, room_id);
+                        tracing::info!(
+                            "User {} voting for card {} in room {}",
+                            participant_id,
+                            card_id,
+                            room_id
+                        );
                         if let Some(mut room_entry) = state_clone.rooms.get_mut(&room_id) {
-                            if let Some(card) = room_entry.room.cards.iter_mut().find(|c| c.id == card_id) {
+                            if let Some(card) =
+                                room_entry.room.cards.iter_mut().find(|c| c.id == card_id)
+                            {
                                 card.votes += 1;
                                 let votes = card.votes;
-                                let _ = room_entry.tx.send(ServerMessage::CardVoted { 
-                                    card_id, 
-                                    votes
-                                });
+                                let _ = room_entry
+                                    .tx
+                                    .send(ServerMessage::CardVoted { card_id, votes });
+                            }
+                        }
+                    }
+                    ClientMessage::EditCard { card_id, text } => {
+                        tracing::info!(
+                            "User {} editing card {} in room {}",
+                            participant_id,
+                            card_id,
+                            room_id
+                        );
+                        if let Some(mut room_entry) = state_clone.rooms.get_mut(&room_id) {
+                            if let Some(card) =
+                                room_entry.room.cards.iter_mut().find(|c| c.id == card_id)
+                            {
+                                if card.author_id == participant_id {
+                                    card.text = text.clone();
+                                    let card_id_copy = card.id;
+                                    let _ = room_entry.tx.send(ServerMessage::CardEdited {
+                                        card_id: card_id_copy,
+                                        text,
+                                    });
+                                } else {
+                                    tracing::warn!(
+                                        "User {} attempted to edit card {} not owned by them",
+                                        participant_id,
+                                        card_id
+                                    );
+                                    let _ = room_entry.tx.send(ServerMessage::Error {
+                                        message: String::from("You can only edit your own cards"),
+                                    });
+                                }
                             }
                         }
                     }
                     ClientMessage::StartTimer { duration_seconds } => {
                         if let Some(mut room_entry) = state_clone.rooms.get_mut(&room_id) {
                             if room_entry.room.creator_id == Some(participant_id) {
-                                tracing::info!("Creator {} starting timer in room {} for {}s", participant_id, room_id, duration_seconds);
+                                tracing::info!(
+                                    "Creator {} starting timer in room {} for {}s",
+                                    participant_id,
+                                    room_id,
+                                    duration_seconds
+                                );
                                 let now = SystemTime::now()
                                     .duration_since(UNIX_EPOCH)
                                     .unwrap_or_default()
                                     .as_secs();
-                                
+
                                 let end_at = now + duration_seconds;
                                 room_entry.room.timer_end_at = Some(end_at);
                                 let _ = room_entry.tx.send(ServerMessage::TimerStarted { end_at });
                             } else {
-                                tracing::warn!("Non-creator {} tried to start timer", participant_id);
+                                tracing::warn!(
+                                    "Non-creator {} tried to start timer",
+                                    participant_id
+                                );
                             }
                         }
                     }
                     ClientMessage::SetShowNames { show_names } => {
-                        tracing::info!("User {} set show_names={} in room {}", participant_id, show_names, room_id);
+                        tracing::info!(
+                            "User {} set show_names={} in room {}",
+                            participant_id,
+                            show_names,
+                            room_id
+                        );
                         if let Some(mut room_entry) = state_clone.rooms.get_mut(&room_id) {
                             room_entry.room.show_names = show_names;
-                            let _ = room_entry.tx.send(ServerMessage::ShowNamesUpdated { show_names });
+                            let _ = room_entry
+                                .tx
+                                .send(ServerMessage::ShowNamesUpdated { show_names });
                         }
                     }
                     ClientMessage::SetAnonymous { anonymous } => {
-                        tracing::info!("User {} set anonymous={} in room {}", participant_id, anonymous, room_id);
+                        tracing::info!(
+                            "User {} set anonymous={} in room {}",
+                            participant_id,
+                            anonymous,
+                            room_id
+                        );
                         if let Some(mut room_entry) = state_clone.rooms.get_mut(&room_id) {
                             let updated_participant = if let Some(participant) = room_entry
                                 .room
@@ -251,7 +351,11 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
                     ClientMessage::CancelTimer => {
                         if let Some(mut room_entry) = state_clone.rooms.get_mut(&room_id) {
                             if room_entry.room.creator_id == Some(participant_id) {
-                                tracing::info!("Creator {} cancelling timer in room {}", participant_id, room_id);
+                                tracing::info!(
+                                    "Creator {} cancelling timer in room {}",
+                                    participant_id,
+                                    room_id
+                                );
                                 room_entry.room.timer_end_at = None;
                                 let _ = room_entry.tx.send(ServerMessage::TimerStopped);
                             }
@@ -260,10 +364,14 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
                     ClientMessage::LeaveRoom => break,
                 }
             } else {
-                tracing::warn!("Failed to parse client message from {}: {}", participant_id, text);
+                tracing::warn!(
+                    "Failed to parse client message from {}: {}",
+                    participant_id,
+                    text
+                );
                 if let Some(room_entry) = state_clone.rooms.get(&room_id) {
-                    let _ = room_entry.tx.send(ServerMessage::Error { 
-                        message: format!("Invalid message format: {}", text) 
+                    let _ = room_entry.tx.send(ServerMessage::Error {
+                        message: format!("Invalid message format: {}", text),
                     });
                 }
             }
@@ -284,22 +392,40 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
     };
 
     // Cleanup: remove participant and notify others
-    tracing::info!("Cleaning up participant {} from room {}", participant_id, room_id);
+    tracing::info!(
+        "Cleaning up participant {} from room {}",
+        participant_id,
+        room_id
+    );
     cleanup_participant(&state, room_id, participant_id, true);
 }
 
-fn cleanup_participant(state: &SharedState, room_id: Uuid, participant_id: Uuid, broadcast_leave: bool) {
+fn cleanup_participant(
+    state: &SharedState,
+    room_id: Uuid,
+    participant_id: Uuid,
+    broadcast_leave: bool,
+) {
     if let Some(mut room_entry) = state.rooms.get_mut(&room_id) {
         let was_creator = room_entry.room.creator_id == Some(participant_id);
 
-        room_entry.room.participants.retain(|participant| participant.id != participant_id);
+        room_entry
+            .room
+            .participants
+            .retain(|participant| participant.id != participant_id);
 
         if was_creator {
-            room_entry.room.creator_id = room_entry.room.participants.first().map(|participant| participant.id);
+            room_entry.room.creator_id = room_entry
+                .room
+                .participants
+                .first()
+                .map(|participant| participant.id);
         }
 
         if broadcast_leave {
-            let _ = room_entry.tx.send(ServerMessage::UserLeft { participant_id });
+            let _ = room_entry
+                .tx
+                .send(ServerMessage::UserLeft { participant_id });
         }
 
         if was_creator {

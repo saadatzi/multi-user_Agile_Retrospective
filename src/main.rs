@@ -12,9 +12,9 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod handlers;
 mod models;
 mod state;
-mod handlers;
 
 #[derive(RustEmbed)]
 #[folder = "frontend/dist"]
@@ -24,8 +24,10 @@ struct FrontendAssets;
 async fn main() {
     // Initialize tracing
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "retro_api=debug,tower_http=debug".into()))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "retro_api=debug,tower_http=debug".into()),
+        )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -50,14 +52,46 @@ async fn main() {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(3000);
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     tracing::info!("listening on http://{}", addr);
-    
+
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 
 async fn serve_frontend(uri: Uri) -> Response {
+    // If a Vite dev server is running (set via VITE_DEV_SERVER), proxy requests to it so
+    // the SPA benefits from HMR and dev middleware while the Rust backend stays running.
+    if let Ok(dev_server) = std::env::var("VITE_DEV_SERVER") {
+        let dev_base = dev_server.trim_end_matches('/');
+        // Build full URL to proxy (path + optional query)
+        let mut path_and_query = uri.path().to_string();
+        if let Some(q) = uri.query() {
+            path_and_query.push('?');
+            path_and_query.push_str(q);
+        }
+        let url = format!("{}{}", dev_base, path_and_query);
+
+        match reqwest::get(&url).await {
+            Ok(resp) => {
+                // Map important headers (Content-Type) and body
+                let bytes = resp.bytes().await.unwrap_or_default();
+                let mut response = Response::new(Body::from(bytes.to_vec()));
+
+                if let Some(ct) = resp.headers().get(reqwest::header::CONTENT_TYPE) {
+                    if let Ok(ct_str) = ct.to_str() {
+                        if let Ok(hv) = HeaderValue::from_str(ct_str) {
+                            response.headers_mut().insert(header::CONTENT_TYPE, hv);
+                        }
+                    }
+                }
+
+                return response;
+            }
+            Err(e) => tracing::warn!("Failed to proxy to Vite dev server at {}: {}", dev_base, e),
+        }
+    }
+
     let requested_path = uri.path().trim_start_matches('/');
     let asset_path = if requested_path.is_empty() {
         "index.html"
@@ -86,7 +120,8 @@ fn serve_asset(path: &str) -> Option<Response> {
     let mut response = Response::new(Body::from(asset.data.into_owned()));
     let content_type = HeaderValue::from_str(mime.as_ref())
         .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
-    response.headers_mut().insert(header::CONTENT_TYPE, content_type);
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, content_type);
     Some(response)
 }
-

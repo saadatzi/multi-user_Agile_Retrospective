@@ -21,6 +21,12 @@ fn main() {
     let frontend_dir = Path::new("frontend");
     let dist_dir = frontend_dir.join("dist");
 
+    // If a Vite dev server is running and set via env var, skip building the frontend.
+    if env::var_os("VITE_DEV_SERVER").is_some() {
+        println!("cargo:warning=VITE_DEV_SERVER is set, skipping frontend build (dev mode).");
+        return;
+    }
+
     if env::var_os("SKIP_FRONTEND_BUILD").is_some() {
         if dist_dir.exists() {
             println!("cargo:warning=Skipping frontend build because SKIP_FRONTEND_BUILD is set.");
