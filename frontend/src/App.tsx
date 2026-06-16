@@ -22,10 +22,8 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-const API_URL = import.meta.env.DEV ? "http://localhost:3000/api" : "/api";
-const WS_URL = import.meta.env.DEV
-  ? "ws://localhost:3000/api"
-  : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/api`;
+const API_URL = "/api";
+const WS_URL = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/api`;
 
 export default function App() {
   const [roomId, setRoomId] = useState<string | null>(() => {
