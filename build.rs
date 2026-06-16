@@ -50,14 +50,8 @@ fn main() {
         println!("cargo:warning=Using existing frontend dependencies.");
     }
 
-    if frontend_build_needed(frontend_dir) {
-        println!("cargo:warning=Running frontend production build...");
-        run_npm(frontend_dir, &["run", "build"]);
-    } else {
-        println!(
-            "cargo:warning=Skipping frontend production build; `frontend/dist` is up to date."
-        );
-    }
+    println!("cargo:warning=Running frontend production build...");
+    run_npm(frontend_dir, &["run", "build"]);
 }
 
 fn npm_install_needed(frontend_dir: &Path) -> bool {
@@ -80,59 +74,6 @@ fn npm_install_needed(frontend_dir: &Path) -> bool {
         }
         _ => true,
     })
-}
-
-fn frontend_build_needed(frontend_dir: &Path) -> bool {
-    let dist_index = frontend_dir.join("dist").join("index.html");
-    if !dist_index.is_file() {
-        return true;
-    }
-
-    let dist_modified = modified_time(&dist_index);
-    let latest_input_modified = latest_frontend_input_time(frontend_dir);
-
-    match (latest_input_modified, dist_modified) {
-        (Some(input_modified), Some(dist_modified)) => input_modified > dist_modified,
-        _ => true,
-    }
-}
-
-fn latest_frontend_input_time(frontend_dir: &Path) -> Option<SystemTime> {
-    [
-        frontend_dir.join("src"),
-        frontend_dir.join("public"),
-        frontend_dir.join("index.html"),
-        frontend_dir.join("package.json"),
-        frontend_dir.join("package-lock.json"),
-        frontend_dir.join("vite.config.ts"),
-        frontend_dir.join("tailwind.config.js"),
-        frontend_dir.join("tsconfig.json"),
-        frontend_dir.join("tsconfig.app.json"),
-        frontend_dir.join("tsconfig.node.json"),
-    ]
-    .into_iter()
-    .filter(|path| path.exists())
-    .filter_map(|path| latest_modified_in_path(&path))
-    .max()
-}
-
-fn latest_modified_in_path(path: &Path) -> Option<SystemTime> {
-    let metadata = fs::metadata(path).ok()?;
-    let mut latest = metadata.modified().ok()?;
-
-    if metadata.is_dir() {
-        let entries = fs::read_dir(path).ok()?;
-        for entry in entries {
-            let entry = entry.ok()?;
-            if let Some(child_modified) = latest_modified_in_path(&entry.path()) {
-                if child_modified > latest {
-                    latest = child_modified;
-                }
-            }
-        }
-    }
-
-    Some(latest)
 }
 
 fn install_frontend_dependencies(frontend_dir: &Path) {
