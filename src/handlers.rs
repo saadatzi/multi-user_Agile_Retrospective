@@ -26,7 +26,13 @@ pub async fn create_room(State(state): State<SharedState>) -> impl IntoResponse 
         show_names: true,
     };
 
-    state.rooms.insert(room_id, RoomState { room, tx });
+    state.rooms.insert(
+        room_id,
+        RoomState {
+            room,
+            tx: tx.into(),
+        },
+    );
 
     (StatusCode::CREATED, Json(json!({ "room_id": room_id })))
 }
@@ -219,14 +225,6 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
                         );
                     }
                     ClientMessage::AddCard { text, category } => {
-                        tracing::info!(
-                            "User {} adding card to room {}: '{}' in {:?}",
-                            participant_id,
-                            room_id,
-                            text,
-                            category
-                        );
-
                         if let Some(mut room_entry) = state_clone.rooms.get_mut(&room_id) {
                             let author = room_entry
                                 .room
@@ -250,12 +248,6 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
                         }
                     }
                     ClientMessage::VoteCard { card_id } => {
-                        tracing::info!(
-                            "User {} voting for card {} in room {}",
-                            participant_id,
-                            card_id,
-                            room_id
-                        );
                         if let Some(mut room_entry) = state_clone.rooms.get_mut(&room_id) {
                             if let Some(card) =
                                 room_entry.room.cards.iter_mut().find(|c| c.id == card_id)
@@ -269,12 +261,6 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
                         }
                     }
                     ClientMessage::EditCard { card_id, text } => {
-                        tracing::info!(
-                            "User {} editing card {} in room {}",
-                            participant_id,
-                            card_id,
-                            room_id
-                        );
                         if let Some(mut room_entry) = state_clone.rooms.get_mut(&room_id) {
                             if let Some(card) =
                                 room_entry.room.cards.iter_mut().find(|c| c.id == card_id)
@@ -302,12 +288,6 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
                     ClientMessage::StartTimer { duration_seconds } => {
                         if let Some(mut room_entry) = state_clone.rooms.get_mut(&room_id) {
                             if room_entry.room.creator_id == Some(participant_id) {
-                                tracing::info!(
-                                    "Creator {} starting timer in room {} for {}s",
-                                    participant_id,
-                                    room_id,
-                                    duration_seconds
-                                );
                                 let now = SystemTime::now()
                                     .duration_since(UNIX_EPOCH)
                                     .unwrap_or_default()
@@ -325,12 +305,6 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
                         }
                     }
                     ClientMessage::SetShowNames { show_names } => {
-                        tracing::info!(
-                            "User {} requested set_show_names={} in room {}",
-                            participant_id,
-                            show_names,
-                            room_id
-                        );
                         if let Some(mut room_entry) = state_clone.rooms.get_mut(&room_id) {
                             // Only the room creator (host) may change the global show_names flag
                             if room_entry.room.creator_id == Some(participant_id) {
@@ -353,12 +327,6 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
                         }
                     }
                     ClientMessage::SetAnonymous { anonymous } => {
-                        tracing::info!(
-                            "User {} set anonymous={} in room {}",
-                            participant_id,
-                            anonymous,
-                            room_id
-                        );
                         if let Some(mut room_entry) = state_clone.rooms.get_mut(&room_id) {
                             let updated_participant = if let Some(participant) = room_entry
                                 .room
@@ -387,11 +355,6 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
                     ClientMessage::CancelTimer => {
                         if let Some(mut room_entry) = state_clone.rooms.get_mut(&room_id) {
                             if room_entry.room.creator_id == Some(participant_id) {
-                                tracing::info!(
-                                    "Creator {} cancelling timer in room {}",
-                                    participant_id,
-                                    room_id
-                                );
                                 room_entry.room.timer_end_at = None;
                                 let _ = room_entry.tx.send(ServerMessage::TimerStopped);
                             }
@@ -412,10 +375,10 @@ async fn handle_socket(socket: WebSocket, room_id: Uuid, state: SharedState) {
                 }
             }
         }
-        tracing::debug!("Recv task for {} finished", participant_id);
+        tracing::info!("Recv task for {} ended", participant_id);
     });
 
-    // Wait for either task to finish
+    // Wait for either task to finish; abort the other when one ends
     tokio::select! {
         _ = (&mut send_task) => {
             tracing::info!("Send task for {} ended, aborting recv task", participant_id);
