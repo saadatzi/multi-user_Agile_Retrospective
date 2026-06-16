@@ -52,7 +52,7 @@ When you run:
 cargo build --release
 ```
 
-Cargo automatically runs the frontend production build through `build.rs`:
+Cargo automatically runs the frontend production build through `build.rs` on every release build:
 
 1. Enters `frontend/`
 2. Installs dependencies if needed
@@ -61,11 +61,19 @@ Cargo automatically runs the frontend production build through `build.rs`:
 3. Runs `npm run build`
 4. Writes the built assets to `frontend/dist`
 
-The build script only runs the frontend release build for the `release` profile, and Cargo watches frontend files so unchanged frontend sources do not trigger unnecessary rebuilds.
+The build script only runs the frontend build for the `release` profile. For production correctness, each release build regenerates `frontend/dist` from the current frontend sources.
 
 ## Serving the frontend in production
 
 At runtime, the Rust backend serves static files from `frontend/dist`.
+
+For production, prefer running the compiled binary directly instead of `cargo run --release`:
+
+```sh
+./target/release/retro-api
+```
+
+This avoids recompiling the project again during startup.
 
 - Real files such as compiled JS, CSS, and public assets are served directly
 - Unknown non-API routes fall back to `frontend/dist/index.html`
