@@ -1,14 +1,16 @@
-use std::sync::Arc;
-use dashmap::DashMap;
-use tokio::sync::broadcast;
-use uuid::Uuid;
 use crate::models::{Room, ServerMessage};
+use dashmap::DashMap;
+use std::sync::Arc;
 
+use uuid::Uuid;
+
+#[derive(Clone)]
 pub struct RoomState {
     pub room: Room,
-    pub tx: broadcast::Sender<ServerMessage>,
+    pub tx: Arc<tokio::sync::broadcast::Sender<ServerMessage>>,
 }
 
+#[derive(Clone)]
 pub struct AppState {
     pub rooms: DashMap<Uuid, RoomState>,
 }
