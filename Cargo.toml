@@ -4,16 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 futures-util = "0.3"
-tower-http = { version = "0.5", features = ["cors", "trace"] }
+
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dashmap = "5.5" # Concurrent HashMap for easier state management
-mime_guess = "2.0"
-rust-embed = "8.5"
 reqwest = { version = "0.11", features = ["rustls-tls", "gzip", "brotli"] }
+tower-http = { version = "0.6", features = ["fs"] }
