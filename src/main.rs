@@ -25,11 +25,14 @@ async fn main() {
     let state = Arc::new(state::AppState::new());
     let app = build_app(state);
 
+    let host = std::env::var("HOST").unwrap_or_else(|_| String::from("0.0.0.0"));
     let port = std::env::var("PORT")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(3000);
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr: SocketAddr = format!("{host}:{port}")
+        .parse()
+        .unwrap_or_else(|error| panic!("invalid bind address {host}:{port}: {error}"));
 
     tracing::info!(address = %addr, "listening");
 

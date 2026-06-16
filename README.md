@@ -26,7 +26,7 @@ From the repository root:
 cargo run
 ```
 
-The backend listens on `http://127.0.0.1:3000` by default.
+The backend listens on `http://127.0.0.1:3000` locally. By default it binds to `0.0.0.0`, so `http://127.0.0.1:3000` still works on your machine and platforms like Render can reach it.
 
 ### 2. Run the frontend
 
@@ -75,12 +75,20 @@ For production, prefer running the compiled binary directly instead of `cargo ru
 
 This avoids recompiling the project again during startup.
 
+For Render specifically:
+
+- Build command: `cargo build --release`
+- Start command: `./target/release/retro-api`
+
+Render expects web services to bind to `0.0.0.0` on the provided `PORT`. If the app binds only to `127.0.0.1`, the deploy will time out and Render will keep serving the previous successful deploy.
+
 - Real files such as compiled JS, CSS, and public assets are served directly
 - Unknown non-API routes fall back to `frontend/dist/index.html`
 - This supports SPA routes such as `/rooms/<room_id>`
 
 ## Environment variables
 
+- `HOST`: backend bind host (default `0.0.0.0`)
 - `PORT`: backend port (default `3000`)
 - `VITE_BACKEND_URL`: optional override for the Vite dev proxy target
 - `FRONTEND_DIST_DIR`: optional override for where the backend should look for built frontend assets
